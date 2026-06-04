@@ -20,10 +20,10 @@ The list supports:
 
 ## Installation
 
-1. Download `Device-Manager-1.0.0.ablx` from the [Releases](../../releases) page
-2. Double-click the `.ablx` file — Live will prompt you to install it
-3. Make sure **Developer Mode is OFF** in `Preferences → Extensions`
-4. Restart Live — the context menu item will appear automatically
+1. Download External-Instruments-1.0.0.ablx from the Releases page
+2. Settings → Extensions, choose the .ablx file
+3. Make sure Developer Mode is OFF in Settings → Extensions
+4. Restart Live — the context menu items will appear automatically
 
 > Requires Ableton Live 12 Beta (or later) with Extensions support.
 
