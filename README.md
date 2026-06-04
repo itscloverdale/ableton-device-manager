@@ -18,10 +18,6 @@ The list supports:
 - **Sorting** by name or instance count (click the column headers)
 - **Search** to filter by name
 
-## Notes
-
-Drum Racks always appear as "Drum Rack" regardless of their preset name. For other device types (e.g. Glue Compressor, EQ Eight), the preset name is shown if one is loaded — this is a current limitation of the Ableton Extensions SDK, which does not expose a device's internal class name separately from its user-facing name.
-
 ## Installation
 
 1. Download `Device-Manager-1.0.0.ablx` from the [Releases](../../releases) page
