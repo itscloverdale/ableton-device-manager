@@ -5,13 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Device Manager</title>
   <script>
-    // Injected by the extension at runtime
-    const DEVICES = __DEVICES__; // [{ displayName, typeKey, count }]
+    const TREE_DATA = __TREE_DATA__;
 
-    let selectedTypeKey = null;
-    let sortField = "name";   // "name" | "count"
-    let sortDir   = "asc";    // "asc"  | "desc"
-    let query     = "";
+    // { deviceHandleId, trackHandleId, typeKey, displayName }
+    let selected = null;
+    let query = "";
 
     function postToHost(msg) {
       if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.live) {
@@ -25,78 +23,147 @@
       postToHost({ method: "close_and_send", params: [JSON.stringify(result)] });
     }
 
-    function selectDevice(typeKey) {
-      selectedTypeKey = typeKey;
+    function selectDevice(device) {
+      selected = device;
+      document.querySelectorAll(".device-row").forEach(r => r.classList.remove("selected"));
+      const el = document.querySelector(`[data-handle="${device.deviceHandleId}"]`);
+      if (el) el.classList.add("selected");
       document.querySelectorAll("[data-action]").forEach(b => b.removeAttribute("disabled"));
-      document.getElementById("hint").style.visibility = "hidden";
-      render();
+      document.getElementById("hint").style.display = "none";
     }
 
     function performAction(action) {
-      if (!selectedTypeKey) return;
-      send({ action, typeKey: selectedTypeKey });
-    }
-
-    function sortBy(field) {
-      if (sortField === field) {
-        sortDir = sortDir === "asc" ? "desc" : "asc";
+      if (!selected) return;
+      if (action === "disable" || action === "enable" || action === "delete") {
+        send({ action, deviceHandleId: selected.deviceHandleId, trackHandleId: selected.trackHandleId });
       } else {
-        sortField = field;
-        sortDir = field === "name" ? "asc" : "desc";
+        send({ action, typeKey: selected.typeKey });
       }
-      updateSortHeaders();
-      render();
     }
 
-    function updateSortHeaders() {
-      ["name", "count"].forEach(f => {
-        const el = document.getElementById("col-" + f);
-        el.dataset.sortDir = sortField === f ? sortDir : "";
-      });
+    // ── Tree rendering ────────────────────────────────────────────────────
+
+    function matchesQuery(name) {
+      return name.toLowerCase().includes(query.toLowerCase());
     }
 
-    function getVisible() {
-      const q = query.toLowerCase();
-      return DEVICES
-        .filter(d => d.displayName.toLowerCase().includes(q))
-        .sort((a, b) => {
-          const cmp = sortField === "name"
-            ? a.displayName.localeCompare(b.displayName)
-            : a.count - b.count;
-          return sortDir === "asc" ? cmp : -cmp;
-        });
+    function trackHasMatch(track) {
+      if (track.devices.some(d => matchesQuery(d.displayName))) return true;
+      return track.children.some(trackHasMatch);
     }
 
-    function render() {
-      const body = document.getElementById("list-body");
-      body.innerHTML = "";
+    function renderTree() {
+      const container = document.getElementById("tree");
+      container.innerHTML = "";
 
-      getVisible().forEach(({ displayName, typeKey, count }) => {
+      const visibleTracks = query
+        ? TREE_DATA.tracks.filter(trackHasMatch)
+        : TREE_DATA.tracks;
+      const visibleReturns = query
+        ? TREE_DATA.returnTracks.filter(trackHasMatch)
+        : TREE_DATA.returnTracks;
+      const mainHasMatch = !query || trackHasMatch(TREE_DATA.mainTrack);
+
+      if (visibleTracks.length > 0) {
+        renderSection(container, visibleTracks, "Tracks", 0);
+      }
+      if (visibleReturns.length > 0) {
+        renderSection(container, visibleReturns, "Return Tracks", 0);
+      }
+      if (mainHasMatch && (TREE_DATA.mainTrack.devices.length > 0 || TREE_DATA.mainTrack.children.length > 0)) {
+        renderSection(container, [TREE_DATA.mainTrack], "Main Track", 0);
+      }
+    }
+
+    function renderSection(container, tracks, label, depth) {
+      const section = document.createElement("div");
+      section.className = "section";
+
+      const header = document.createElement("div");
+      header.className = "section-header";
+      header.textContent = label;
+      section.appendChild(header);
+
+      tracks.forEach(t => renderTrack(section, t, depth));
+      container.appendChild(section);
+    }
+
+    function renderTrack(container, track, depth) {
+      const visibleDevices = query
+        ? track.devices.filter(d => matchesQuery(d.displayName))
+        : track.devices;
+
+      const visibleChildren = query
+        ? track.children.filter(trackHasMatch)
+        : track.children;
+
+      const wrapper = document.createElement("div");
+      wrapper.className = "track-wrapper";
+
+      // Track header row
+      const header = document.createElement("div");
+      header.className = `track-row kind-${track.kind}`;
+      header.style.paddingLeft = `${8 + depth * 14}px`;
+
+      const arrow = document.createElement("span");
+      arrow.className = "arrow";
+      arrow.textContent = "▾";
+
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "track-name";
+      nameSpan.textContent = track.name;
+
+      const badge = document.createElement("span");
+      badge.className = `badge badge-${track.kind}`;
+      badge.textContent =
+        track.kind === "group" ? "GRP"
+        : track.kind === "midi" ? "MIDI"
+        : track.kind === "audio" ? "AUDIO"
+        : track.kind === "return" ? "RTN"
+        : "MAIN";
+
+      header.appendChild(arrow);
+      header.appendChild(nameSpan);
+      header.appendChild(badge);
+
+      // Collapsible content
+      const content = document.createElement("div");
+      content.className = "track-content";
+
+      visibleDevices.forEach(device => {
         const row = document.createElement("button");
-        row.className = "device-row" + (typeKey === selectedTypeKey ? " selected" : "");
-        row.dataset.key = typeKey;
-        row.innerHTML =
-          `<span class="col-name">${displayName}</span>` +
-          `<span class="col-count">${count}</span>`;
-        row.onclick = () => selectDevice(typeKey);
-        body.appendChild(row);
+        row.className = "device-row";
+        if (selected && selected.deviceHandleId === device.deviceHandleId) {
+          row.classList.add("selected");
+        }
+        row.dataset.handle = device.deviceHandleId;
+        row.style.paddingLeft = `${20 + (depth + 1) * 14}px`;
+        row.textContent = device.displayName;
+        row.onclick = () => selectDevice(device);
+        content.appendChild(row);
       });
 
-      if (body.children.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "empty";
-        empty.textContent = "No devices match your search.";
-        body.appendChild(empty);
-      }
+      visibleChildren.forEach(child => renderTrack(content, child, depth + 1));
+
+      // Collapse toggle
+      let collapsed = false;
+      header.onclick = () => {
+        collapsed = !collapsed;
+        content.style.display = collapsed ? "none" : "";
+        arrow.textContent = collapsed ? "▸" : "▾";
+      };
+
+      wrapper.appendChild(header);
+      wrapper.appendChild(content);
+      container.appendChild(wrapper);
     }
 
     document.addEventListener("DOMContentLoaded", () => {
-      updateSortHeaders();
-      render();
+      renderTree();
 
       document.getElementById("search").addEventListener("input", e => {
         query = e.target.value;
-        render();
+        renderTree();
       });
 
       document.addEventListener("keydown", e => {
@@ -115,6 +182,7 @@
       --bg-input:     hsl(0, 0%, 12%);
       --bg-btn:       hsl(0, 0%, 16%);
       --bg-btn-hover: hsl(0, 0%, 19%);
+      --bg-section:   hsl(0, 0%, 18%);
       --border:       hsl(0, 0%, 7%);
       --text:         hsl(0, 0%, 71%);
       --text-dim:     hsl(0, 0%, 41%);
@@ -142,10 +210,8 @@
       gap: 8px;
     }
 
-    /* ── Title ── */
     .title { font-size: 1.1rem; }
 
-    /* ── Search ── */
     .search-input {
       width: 100%;
       height: 22px;
@@ -158,7 +224,7 @@
     .search-input::placeholder { color: var(--text-dim); }
     .search-input:focus { outline: 2px solid var(--text-dim); outline-offset: 0; }
 
-    /* ── Main area: list + sidebar ── */
+    /* Main area */
     .main {
       display: flex;
       gap: 8px;
@@ -166,86 +232,97 @@
       min-height: 0;
     }
 
-    /* ── Device list ── */
-    .list-wrap {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      border: 1px solid var(--border);
-      background: var(--bg-input);
-      min-height: 0;
-    }
-
-    /* Column header row */
-    .list-header {
-      display: flex;
-      flex-shrink: 0;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .col-header {
-      background: var(--bg-btn);
-      color: var(--text-dim);
-      border: none;
-      padding: 0 8px;
-      height: 22px;
-      text-align: left;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      user-select: none;
-    }
-    .col-header:hover { color: var(--text); }
-
-    .col-header-name  { flex: 1; border-right: 1px solid var(--border); }
-    .col-header-count { width: 72px; justify-content: flex-end; }
-
-    /* Sort arrow: hidden by default, shown when active */
-    .sort-arrow { opacity: 0; font-size: 0.85rem; }
-    [data-sort-dir="asc"]  .sort-arrow { opacity: 1; content: "↑"; }
-    [data-sort-dir="desc"] .sort-arrow { opacity: 1; }
-    [data-sort-dir="asc"]  .sort-arrow::before { content: "↑"; }
-    [data-sort-dir="desc"] .sort-arrow::before { content: "↓"; }
-
-    /* Scrollable rows */
-    #list-body {
+    /* Tree */
+    .tree-wrap {
       flex: 1;
       overflow-y: auto;
+      border: 1px solid var(--border);
+      background: var(--bg-input);
     }
 
-    .device-row {
-      width: 100%;
+    /* Section label ("Tracks", "Return Tracks", "Main Track") */
+    .section-header {
+      padding: 4px 8px;
+      color: var(--text-dim);
+      background: var(--bg-section);
+      border-bottom: 1px solid var(--border);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 0.9rem;
+    }
+
+    /* Track rows */
+    .track-row {
       display: flex;
       align-items: center;
+      gap: 6px;
+      height: 22px;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 1px solid var(--border);
+    }
+    .track-row:hover { background: var(--bg-btn-hover); }
+    .track-content > .track-wrapper:last-child > .track-row { border-bottom: none; }
+
+    .arrow { color: var(--text-dim); font-size: 0.85rem; flex-shrink: 0; }
+    .track-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Track type badges */
+    .badge {
+      font-size: 0.8rem;
+      padding: 1px 4px;
+      border-radius: 2px;
+      flex-shrink: 0;
+      margin-right: 6px;
+      color: var(--text-on-accent);
+    }
+    .badge-midi   { background: hsl(31, 80%, 55%); }
+    .badge-audio  { background: hsl(200, 50%, 45%); }
+    .badge-group  { background: hsl(270, 30%, 50%); }
+    .badge-return { background: hsl(150, 30%, 40%); }
+    .badge-main   { background: hsl(0, 0%, 35%); color: var(--text); }
+
+    /* Device rows */
+    .device-row {
+      display: block;
+      width: 100%;
       background: transparent;
       border: none;
       border-bottom: 1px solid var(--border);
       color: var(--text);
-      padding: 0 8px;
-      height: 24px;
       text-align: left;
+      height: 22px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .device-row:last-child { border-bottom: none; }
-    .device-row:hover { background: var(--bg-btn-hover); }
+    .track-content > .device-row:last-child,
+    .track-content > .track-wrapper:last-child .device-row:last-child { border-bottom: none; }
+    .device-row:hover   { background: var(--bg-btn-hover); }
     .device-row.selected { background: var(--accent); color: var(--text-on-accent); }
 
-    .col-name  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .col-count { width: 64px; text-align: right; color: var(--text-dim); flex-shrink: 0; }
-    .device-row.selected .col-count { color: var(--text-on-accent); }
-
-    .empty {
-      padding: 12px 8px;
-      color: var(--text-dim);
-      text-align: center;
-    }
-
-    /* ── Sidebar action buttons ── */
+    /* Action sidebar */
     .actions {
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      width: 96px;
+      gap: 5px;
+      width: 108px;
       flex-shrink: 0;
+    }
+
+    .action-label {
+      font-size: 0.9rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 2px 0;
+    }
+
+    .action-sep {
+      height: 1px;
+      background: var(--border);
+      margin: 2px 0;
     }
 
     .spacer { flex: 1; }
@@ -265,13 +342,12 @@
     .btn:hover  { background: var(--bg-btn-hover); }
     .btn:active { background: var(--accent); color: var(--text-on-accent); }
     .btn:focus  { outline: 2px solid var(--text-dim); }
-    .btn:disabled { opacity: 0.35; pointer-events: none; }
+    .btn:disabled { opacity: 0.3; pointer-events: none; }
 
     .btn-danger { background: var(--danger); color: #fff; border-color: transparent; }
     .btn-danger:hover  { background: var(--danger-hover); }
     .btn-danger:active { background: var(--danger-hover); color: #fff; }
 
-    /* ── Hint ── */
     .hint { font-size: 1rem; color: var(--text-dim); }
   </style>
 </head>
@@ -281,27 +357,26 @@
   <input id="search" class="search-input" type="text" placeholder="Search devices…" autocomplete="off" />
 
   <div class="main">
-    <div class="list-wrap">
-      <div class="list-header">
-        <button id="col-name" class="col-header col-header-name" onclick="sortBy('name')">
-          Name <span class="sort-arrow"></span>
-        </button>
-        <button id="col-count" class="col-header col-header-count" onclick="sortBy('count')">
-          <span class="sort-arrow"></span> Instances
-        </button>
-      </div>
-      <div id="list-body"></div>
-    </div>
+    <div class="tree-wrap" id="tree"></div>
 
     <div class="actions">
-      <button class="btn" data-action disabled onclick="performAction('disable')">Disable All</button>
-      <button class="btn" data-action disabled onclick="performAction('enable')">Enable All</button>
+      <div class="action-label">This device</div>
+      <button class="btn" data-action disabled onclick="performAction('disable')">Disable</button>
+      <button class="btn" data-action disabled onclick="performAction('enable')">Enable</button>
+      <button class="btn btn-danger" data-action disabled onclick="performAction('delete')">Delete</button>
+
+      <div class="action-sep"></div>
+
+      <div class="action-label">All instances</div>
+      <button class="btn" data-action disabled onclick="performAction('disable-all')">Disable All</button>
+      <button class="btn" data-action disabled onclick="performAction('enable-all')">Enable All</button>
+      <button class="btn btn-danger" data-action disabled onclick="performAction('delete-all')">Delete All</button>
+
       <div class="spacer"></div>
-      <button class="btn btn-danger" data-action disabled onclick="performAction('delete')">Delete All</button>
-      <button class="btn" onclick="send({ action: 'cancel' })">Cancel</button>
+      <button class="btn" onclick="send({ action: 'cancel' })">Exit</button>
     </div>
   </div>
 
-  <div class="hint" id="hint">Select a device to manage all its instances</div>
+  <div class="hint" id="hint">Select a device from the project tree</div>
 </body>
 </html>
